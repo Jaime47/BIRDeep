@@ -3,133 +3,145 @@ import pandas as pd
 import os
 import cv2
 import matplotlib.pyplot as plt
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras import models, layers
+from tensorflow.keras.layers import RandomFlip, RandomRotation, RandomContrast, Dropout
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.regularizers import l1, l2
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
 import datetime
+from tensorflow.keras.applications import InceptionV3
 
-# Load class names
-class_names = np.load("class_names.npy", allow_pickle=True).item()
 
-# Load train data
-train_df = pd.read_csv("train_images.csv")
+## Pathing
+path_to_code = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/'
+path_to_sub = '/Users/jaimeponsgarrido/Downloads/BIRDeep/sub/'
+train_folder = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/train_images/' 
+test_folder = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/test_images/'
+path_to_train_csv_file = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/train_images.csv' 
+path_to_test_csv_file = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/test_images_path.csv'  
+###
+train = pd.read_csv(path_to_train_csv_file)
+test = pd.read_csv(path_to_test_csv_file)
+###
+### Variables
+batch_size = 32
+img_height = 299
+img_width = 299
+###
+train['label'] = train['label'] - 1
 
-# Assuming you have train_images folder with images
-train_datagen = ImageDataGenerator(rescale=1./255)
+# Data loading
+class_names = np.load(path_to_code + "class_names.npy", allow_pickle=True).item()
 
-# Assuming script_dir is the directory of your script
-script_dir = os.path.dirname(os.path.abspath(__file__))
-train_images = os.path.join(script_dir, 'train_images')
+train_ds = tf.keras.utils.image_dataset_from_directory(
+  train_folder,
+  validation_split=0.2,
+  subset="training",
+  label_mode = 'int',
+  labels = train['label'].tolist(),
+  seed=123,
+  image_size=(img_height, img_width),
+  batch_size=batch_size)
 
-# Load and preprocess images
-X = []
-y = []
+val_ds = tf.keras.utils.image_dataset_from_directory(
+  train_folder,
+  validation_split=0.2,
+  subset="validation",
+  label_mode = 'int',
+  labels = train['label'].tolist(),
+  seed=123,
+  image_size=(img_height, img_width),
+  batch_size=batch_size)
 
-for index, row in train_df.iterrows():
-    img_filename = row['image_path'][1:]  # Remove leading "/"
-    img_path = os.path.join(train_images, img_filename)
-    label = row['label'] - 1
+test_ds = tf.keras.utils.image_dataset_from_directory(
+  test_folder,
+  labels = None,
+  seed=123,
+  image_size=(img_height, img_width),
+  batch_size=batch_size)
 
-    img = cv2.imread(img_path)
+AUTOTUNE = tf.data.AUTOTUNE
+# Augmentation
+data_augmentation = tf.keras.Sequential([
+  layers.RandomFlip("horizontal_and_vertical"),
+  layers.RandomRotation(0.2),
+])
+# Resizing
+resize_and_rescale = tf.keras.Sequential([
+  layers.Resizing(299, 299),
+  layers.Rescaling(1./255)
+])
+# Data augmentation / resizing routine
+def prepare(ds, shuffle=False, augment=False):
+    if shuffle:
+        ds = ds.shuffle(1000)
     
-    # Ensure that the image has 3 channels
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (224, 224))
-    img = img / 255.0
+    # Use data augmentation only on the training set.
+    if augment:
+        ds = ds.map(lambda x, y: (data_augmentation(x, training=True), y), 
+                num_parallel_calls=AUTOTUNE)
 
-    X.append(img)
-    y.append(label)
+    return ds.prefetch(buffer_size=AUTOTUNE)
 
-# Convert lists to NumPy arrays
-X_train = np.array(X)
-y_train = np.array(y)
+train_ds = prepare(train_ds, shuffle=True, augment=True)
+val_ds = prepare(val_ds)
+test_ds = prepare(test_ds)
 
-# Split data into training and validation sets
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+print('Message: End of data augmentation')
 
-# Model architecture
-model = Sequential()
+# Xception model
+base_model = tf.keras.applications.xception.Xception(weights="imagenet",
+                                                     include_top=False)
 
-model.add(Conv2D(32, (3, 3), input_shape=(224, 224, 3), activation='elu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
+avg = tf.keras.layers.GlobalAveragePooling2D()(base_model.output)
+dropout = Dropout(0.5)(avg) 
+dense_layer = tf.keras.layers.Dense(200, activation="softmax", kernel_regularizer=l2(0.01))(dropout)
+model = tf.keras.Model(inputs=base_model.input, outputs=dense_layer)
 
-model.add(Conv2D(64, (3, 3), activation='elu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
+for layer in base_model.layers:
+    layer.trainable = False
 
-model.add(Conv2D(128, (3, 3), activation='elu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-
-model.add(Flatten())
-model.add(Dropout(0.2))  # dropout 
-model.add(Dense(128, activation='elu'))
-model.add(Dropout(0.2))  # dropout 
-model.add(Dense(128, activation='elu'))
-model.add(Dropout(0.2))  # dropout 
-model.add(Dense(200, activation='softmax'))  # Assuming 200 classes
-
-# Compile the model
-model.compile(optimizer='adam', loss=SparseCategoricalCrossentropy(), metrics=['accuracy'])
+optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=0.001)
+model.compile(loss = tf.keras.losses.SparseCategoricalCrossentropy()
+             ,optimizer = optimizer
+             ,metrics = ['accuracy'])
 
 # Implement early stopping
 early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+             
+model.summary()
 
-# Train the model
-model.fit(X_train, y_train, epochs=10, validation_data=(X_val, y_val))
-
-# Load test data paths
-test_df = pd.read_csv("test_images_path.csv")
-
-# Assuming you have test_images folder with images
-test_datagen = ImageDataGenerator(rescale=1./255)
-
-test_images = os.path.join(script_dir, 'test_images')
-
-# Load and preprocess test images
-X_test = []
-
-for index, row in test_df.iterrows():
-    img_filename = row['image_path'][1:]  # Remove leading "/"
-    img_path = os.path.join(test_images, img_filename)
-
-    img = cv2.imread(img_path)
-    
-    # Ensure that the image has 3 channels
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
-    img = cv2.resize(img, (224, 224))
-    img = img / 255.0
-
-    X_test.append(img)
-
-# Convert list to NumPy array
-X_test = np.array(X_test)
+### Model fit
+history = model.fit(train_ds
+         ,steps_per_epoch = len(train_ds)
+         ,epochs = 12
+         ,validation_data = val_ds
+         ,validation_steps = int(0.25*len(val_ds))
+         ,callbacks=[early_stopping])
 
 # Make predictions on the test set
-predictions = model.predict(X_test)
+predictions = model.predict(test_ds)
 
 # Convert predictions to class labels
 predicted_labels = np.argmax(predictions, axis=1)
-
+print(predicted_labels)
 # Update the 'label' column in the test dataframe with the predicted labels
-test_df['label'] = predicted_labels
+results = pd.DataFrame({'id': range(1, 4001)})
 
-selected_columns = ['id', 'label']
-test_df_selected = test_df[selected_columns]
+results['label'] = predicted_labels
 
 # Generate a timestamp for the filename
 current_datetime = datetime.datetime.now()
 timestamp = current_datetime.strftime("%Y%m%d_%H%M")
 file_name = f"submission_{timestamp}.csv"
 
-# Define the folder for submissions
-submissions_folder = os.path.join(script_dir, 'submissions')
-
 # Specify the full file path
-file_path = os.path.join(submissions_folder, file_name)
+file_path = os.path.join(path_to_sub, file_name)
 
 # Save the final submission file
-test_df_selected.to_csv(file_path, index=False)
+results.to_csv(file_path, index=False)
