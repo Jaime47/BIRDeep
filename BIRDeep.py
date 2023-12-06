@@ -26,7 +26,6 @@ path_to_train_csv_file = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/train_i
 path_to_test_csv_file = '/Users/jaimeponsgarrido/Downloads/BIRDeep/code/test_images_path.csv'  
 ###
 train = pd.read_csv(path_to_train_csv_file)
-test = pd.read_csv(path_to_test_csv_file)
 ###
 ### Variables
 batch_size = 32
@@ -58,13 +57,32 @@ val_ds = tf.keras.utils.image_dataset_from_directory(
   image_size=(img_height, img_width),
   batch_size=batch_size)
 
-test_ds = tf.keras.utils.image_dataset_from_directory(
-  test_folder,
-  labels = None,
-  seed=42,
-  image_size=(img_height, img_width),
-  batch_size=batch_size)
+#########
+def load_and_preprocess_images(data_df, image_folder):
+    X = []
+    y = []
 
+    for index, row in data_df.iterrows():
+        img_filename = row['image_path'][1:]  # Remove leading "/"
+        img_path = os.path.join(image_folder, img_filename)
+        print(img_path)
+        label = row['label'] - 1
+
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (299, 299))
+        img = img / 255.0
+
+        X.append(img)
+        y.append(label)
+
+    return np.array(X), np.array(y)
+#########
+
+test = pd.read_csv(path_to_test_csv_file)
+X_test, _ = load_and_preprocess_images(test, path_to_code)
+
+print(X_test)
 
 AUTOTUNE = tf.data.AUTOTUNE
 # Augmentation
@@ -108,7 +126,7 @@ model = tf.keras.Model(inputs=base_model.input, outputs=dense_layer)
 #for layer in base_model.layers:
 #    layer.trainable = False
 
-optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=0.0001)
+optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=0.001)
 model.compile(loss = tf.keras.losses.SparseCategoricalCrossentropy()
              ,optimizer = optimizer
              ,metrics = ['accuracy'])
@@ -121,16 +139,19 @@ model.summary()
 ### Model fit
 history = model.fit(train_ds
          #,steps_per_epoch = len(train_ds)
-         ,epochs = 5
+         ,epochs = 1
          ,validation_data = val_ds
          #,validation_steps = int(0.25*len(val_ds))
          ,callbacks=[early_stopping])
 
 # Make predictions on the test set
-predictions = model.predict(test_ds)
+#test = pd.read_csv(path_to_test_csv_file)
+#X_test, _ = load_and_preprocess_images(test, path_to_code)
+predictions = model.predict(X_test)
 
 # Convert predictions to class labels
 predicted_labels = np.argmax(predictions, axis=1) + 1
+
 test['label'] = predicted_labels
 
 selected_cols = ['id', 'label']
