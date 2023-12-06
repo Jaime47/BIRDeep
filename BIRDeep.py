@@ -32,9 +32,9 @@ test = pd.read_csv(path_to_test_csv_file)
 batch_size = 32
 img_height = 299
 img_width = 299
-###
+### Useless stuff:
 train['label'] = train['label'] - 1
-
+train_sorted = train.sort_values(by='image_path')
 # Data loading
 class_names = np.load(path_to_code + "class_names.npy", allow_pickle=True).item()
 
@@ -43,27 +43,28 @@ train_ds = tf.keras.utils.image_dataset_from_directory(
   validation_split=0.2,
   subset="training",
   label_mode = 'int',
-  labels = train['label'].tolist(),
-  seed=123,
+  labels = train_sorted['label'].to_list(),
+  seed=42,
   image_size=(img_height, img_width),
   batch_size=batch_size)
 
 val_ds = tf.keras.utils.image_dataset_from_directory(
   train_folder,
   validation_split=0.2,
-  subset="validation",
+  subset = "validation",
   label_mode = 'int',
-  labels = train['label'].tolist(),
-  seed=123,
+  labels = train_sorted['label'].to_list(),
+  seed=42,
   image_size=(img_height, img_width),
   batch_size=batch_size)
 
 test_ds = tf.keras.utils.image_dataset_from_directory(
   test_folder,
   labels = None,
-  seed=123,
+  seed=42,
   image_size=(img_height, img_width),
   batch_size=batch_size)
+
 
 AUTOTUNE = tf.data.AUTOTUNE
 # Augmentation
@@ -78,8 +79,9 @@ resize_and_rescale = tf.keras.Sequential([
 ])
 # Data augmentation / resizing routine
 def prepare(ds, shuffle=False, augment=False):
+    
     if shuffle:
-        ds = ds.shuffle(1000)
+        ds = ds.shuffle(len(train_ds))
     
     # Use data augmentation only on the training set.
     if augment:
@@ -88,9 +90,9 @@ def prepare(ds, shuffle=False, augment=False):
 
     return ds.prefetch(buffer_size=AUTOTUNE)
 
-train_ds = prepare(train_ds, shuffle=True, augment=True)
-val_ds = prepare(val_ds)
-test_ds = prepare(test_ds)
+#train_ds = prepare(train_ds, shuffle=True, augment=True)
+#val_ds = prepare(val_ds)
+#test_ds = prepare(test_ds)
 
 print('Message: End of data augmentation')
 
@@ -103,10 +105,10 @@ dropout = Dropout(0.5)(avg)
 dense_layer = tf.keras.layers.Dense(200, activation="softmax", kernel_regularizer=l2(0.01))(dropout)
 model = tf.keras.Model(inputs=base_model.input, outputs=dense_layer)
 
-for layer in base_model.layers:
-    layer.trainable = False
+#for layer in base_model.layers:
+#    layer.trainable = False
 
-optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=0.001)
+optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=0.0001)
 model.compile(loss = tf.keras.losses.SparseCategoricalCrossentropy()
              ,optimizer = optimizer
              ,metrics = ['accuracy'])
@@ -118,22 +120,21 @@ model.summary()
 
 ### Model fit
 history = model.fit(train_ds
-         ,steps_per_epoch = len(train_ds)
-         ,epochs = 12
+         #,steps_per_epoch = len(train_ds)
+         ,epochs = 5
          ,validation_data = val_ds
-         ,validation_steps = int(0.25*len(val_ds))
+         #,validation_steps = int(0.25*len(val_ds))
          ,callbacks=[early_stopping])
 
 # Make predictions on the test set
 predictions = model.predict(test_ds)
 
 # Convert predictions to class labels
-predicted_labels = np.argmax(predictions, axis=1)
-print(predicted_labels)
-# Update the 'label' column in the test dataframe with the predicted labels
-results = pd.DataFrame({'id': range(1, 4001)})
+predicted_labels = np.argmax(predictions, axis=1) + 1
+test['label'] = predicted_labels
 
-results['label'] = predicted_labels
+selected_cols = ['id', 'label']
+test_selected = test[selected_cols]
 
 # Generate a timestamp for the filename
 current_datetime = datetime.datetime.now()
@@ -144,4 +145,4 @@ file_name = f"submission_{timestamp}.csv"
 file_path = os.path.join(path_to_sub, file_name)
 
 # Save the final submission file
-results.to_csv(file_path, index=False)
+test_selected.to_csv(file_path, index=False)
