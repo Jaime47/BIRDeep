@@ -67,3 +67,6 @@ All the other Branches were created for testing purposes and can be ingnored reg
 | Leonardo Provenzano   | leonardo.provenzano@student.uva.nl   |
 
 Project Link: https://github.com/Jaime47/BIRDeep
+
+### Images Loading
+"To facilitate the efficient loading of images, we developed a function that creates distinct subfolders for each class and organizes the images accordingly. To streamline the process of transferring the dataset across different machines, such as Colab and Snellius, we uploaded the directory containing both train and test images to [Roboflow](https://roboflow.com/). Leveraging Roboflow's export capabilities, we were able to easily move the images to our desired destinations whenever needed.
